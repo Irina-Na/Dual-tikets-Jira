@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from dataclasses import dataclass
 from typing import Dict, Any, List
 
 import pandas as pd
@@ -39,8 +38,8 @@ except ImportError:
             return func
         return decorator
 
-from bug_dedup_prompts import PAIR_SYSTEM_PROMPT  # системный промпт для пар
-
+from bug_dedup_prompts import PAIR_SYSTEM_PROMPT, PairLLMResult  # системный промпт для пар
+from tikets_preraratior import format_ticket_json, format_ticket_markdown, build_pair_user_input
 from dotenv import load_dotenv
 
 # сразу после импортов
@@ -55,7 +54,11 @@ MODEL_NAME = "gpt-5.1"
 SERVICE_TIER_FLEX = "flex"
 
 # Таймаут увеличиваем, потому что flex может отвечать медленнее
-DEFAULT_TIMEOUT_SECONDS = 900.0
+DEFAULT_TIMEOUT_SECONDS = 900.0  # 15 minutes per flex guidance to reduce timeouts
+# Пути по умолчанию для CLI (используются, если аргументы не переданы)
+DEFAULT_ISSUES_PATH = ""
+DEFAULT_PAIRS_PATH = "C:\Users\Ironia\PycharmProjects\Dual-tikets-Jira\labler"
+DEFAULT_OUTPUT_PATH = "C:\Users\Ironia\PycharmProjects\Dual-tikets-Jira\labler\docs\output"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -89,89 +92,8 @@ def get_client() -> OpenAI:
 
 
 # ─────────────────────────────────────────────────────────────
-# Форматирование тикетов и пар для промпта
-# ─────────────────────────────────────────────────────────────
-
-PAIR_PROMPT_TEMPLATE_HEADER = """Ниже дана пара баг-тикетов одного продукта и одной платформы.
-
-Тебе нужно, строго следуя правилам из системного промпта, отнести пару к одной из четырёх категорий:
-- "duplicate"
-- "probable_duplicate"
-- "regression"
-- "unrelated"
-
-Формат ответа:
-Верни строго один JSON-объект:
-{
-  "label": "<duplicate | probable_duplicate | regression | unrelated>"
-}
-
-Никакого текста вне JSON.
-
-Описание пары:
-"""
-
-
-def format_ticket_markdown(issue: Dict[str, Any], tag: str) -> str:
-    """
-    Формирует компактное markdown-описание одного тикета.
-
-    tag — пометка "issue_1" или "issue_2", просто для читабельности.
-    """
-    key = issue.get("key", "")
-    summary = (issue.get("summary") or "").strip()
-    description = (issue.get("description") or "").strip()
-    platform = issue.get("platform") or "unknown"
-    components = issue.get("components") or ""
-    environment = issue.get("environment") or ""
-    status = issue.get("status") or ""
-    resolution = issue.get("resolution") or ""
-    created = issue.get("created") or ""
-    updated = issue.get("updated") or ""
-
-    lines = []
-    lines.append(f"### {tag}: {key}")
-    if summary:
-        lines.append(f"**Кратко (summary):** {summary}")
-    lines.append(f"**Платформа:** {platform}")
-    if components:
-        lines.append(f"**Компоненты:** {components}")
-    if environment:
-        lines.append(f"**Окружение:** {environment}")
-    if status:
-        lines.append(f"**Статус:** {status}")
-    if resolution:
-        lines.append(f"**Resolution:** {resolution}")
-    if created or updated:
-        lines.append(f"**Создан / обновлён:** {created} / {updated}")
-    if description:
-        lines.append("")
-        lines.append("**Описание (включая шаги, ФР и ОР, если есть):**")
-        lines.append(description.strip())
-
-    return "\n".join(lines)
-
-
-def build_pair_user_input(issue1: Dict[str, Any], issue2: Dict[str, Any]) -> str:
-    """Строим полный markdown-текст для пары тикетов."""
-    parts: List[str] = [PAIR_PROMPT_TEMPLATE_HEADER]
-    parts.append(format_ticket_markdown(issue1, tag="issue_1"))
-    parts.append("")
-    parts.append(format_ticket_markdown(issue2, tag="issue_2"))
-    return "\n\n".join(parts)
-
-
-# ─────────────────────────────────────────────────────────────
 # Вызов LLM с ретраями
 # ─────────────────────────────────────────────────────────────
-
-@dataclass
-class PairLLMResult:
-    issue_key_1: str
-    issue_key_2: str
-    label: str
-    raw_json: Dict[str, Any]
-
 
 def is_retryable_error(exc: BaseException) -> bool:
     """Определяем, нужно ли ретраить исключение (rate limit / временные ошибки)."""
@@ -193,30 +115,31 @@ def is_retryable_error(exc: BaseException) -> bool:
 )
 def call_llm_for_pair_chat(
     client: OpenAI,
-    user_input_markdown: str,
-) -> Dict[str, Any]:
+    user_input_str: str,
+    response_format: Any
+) -> tuple[PairLLMResult, Dict[str, Any]]:
     """
     Вызов gpt-5.1 (Chat Completions) в режиме flex для одной пары.
 
     - system message = PAIR_SYSTEM_PROMPT
     - user message = markdown с двумя тикетами
-    - response_format = json_object, чтобы гарантировать валидный JSON
+    - text_format (Responses API) = PairLLMResult (Pydantic), чтобы получить структурированный ответ
     - service_tier = "flex" (дешевле, но медленнее; подходит для оффлайн-разметки)
     """
-    response = client.chat.completions.create(
+    # Flex может отвечать медленнее, поэтому выставляем увеличенный таймаут на уровень запроса.
+    response = client.with_options(timeout=DEFAULT_TIMEOUT_SECONDS).responses.parse(
         model=MODEL_NAME,
-        messages=[
+        input=[
             {"role": "system", "content": PAIR_SYSTEM_PROMPT},
-            {"role": "user", "content": user_input_markdown},
+            {"role": "user", "content": user_input_str},
         ],
-        response_format={"type": "json_object"},
+        text_format=response_format,
         service_tier=SERVICE_TIER_FLEX,
     )
 
-    # для JSON-режима content — строка с JSON'ом
-    content = response.choices[0].message.content
-    data = json.loads(content)
-    return data
+    parsed: PairLLMResult = response.output_parsed
+    raw_json: Dict[str, Any] = response.model_dump()
+    return parsed, raw_json
 
 
 # ВАЖНО:
@@ -227,25 +150,28 @@ def label_pair(
     client: OpenAI,
     issue1: Dict[str, Any],
     issue2: Dict[str, Any],
-) -> PairLLMResult:
+) -> tuple[PairLLMResult, Dict[str, Any]]:
     """
     Формирует input для пары тикетов, вызывает LLM и возвращает результат.
 
     Этот шаг — корневой trace в LangSmith.
     """
     user_input = build_pair_user_input(issue1, issue2)
-    data = call_llm_for_pair_chat(client, user_input)
+    data, raw_json = call_llm_for_pair_chat(client, user_input, PairLLMResult)
 
-    label = data.get("label")
+    label = data.label
     if label not in ("duplicate", "probable_duplicate", "regression", "unrelated"):
-        raise ValueError(f"Неверный label от LLM: {label!r}, raw={data}")
+        print(f"Неверный label от LLM: {label!r}, raw={data}")
+        label = "unknown"
 
-    return PairLLMResult(
+    parsed_result = PairLLMResult(
         issue_key_1=issue1.get("key", ""),
         issue_key_2=issue2.get("key", ""),
         label=label,
-        raw_json=data,
+        reason=data.reason,
     )
+    raw_json = raw_json or parsed_result.model_dump()
+    return parsed_result, raw_json
 
 
 # ─────────────────────────────────────────────────────────────
@@ -322,7 +248,7 @@ def label_all_pairs(
             continue
 
         try:
-            pair_res = label_pair(client, issue1, issue2)
+            pair_res, raw_json = label_pair(client, issue1, issue2)
         except Exception as e:
             print(f"[ERROR] Ошибка при обработке пары {key1} / {key2}: {e}")
             continue
@@ -332,7 +258,8 @@ def label_all_pairs(
                 "issue_key_1": pair_res.issue_key_1,
                 "issue_key_2": pair_res.issue_key_2,
                 "label": pair_res.label,
-                "raw_json": json.dumps(pair_res.raw_json, ensure_ascii=False),
+                "reason": pair_res.reason,
+                "raw_json": json.dumps(raw_json, ensure_ascii=False),
             }
         )
 
@@ -350,20 +277,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--issues",
-        required=True,
+        default=DEFAULT_ISSUES_PATH,
         help="Путь к файлу с тикетами (parquet/csv/xlsx) с колонкой 'key'",
     )
     parser.add_argument(
         "--pairs",
-        required=True,
+        default=DEFAULT_PAIRS_PATH,
         help="Путь к файлу с парами (parquet/csv/xlsx) с колонками 'issue_key_1', 'issue_key_2'",
     )
     parser.add_argument(
         "--output",
-        required=True,
+        default=DEFAULT_OUTPUT_PATH,
         help="Путь к выходному файлу (csv или xlsx). По расширению определяется формат.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.issues:
+        parser.error("--issues is required (или установите DEFAULT_ISSUES_PATH)")
+    if not args.pairs:
+        parser.error("--pairs is required (или установите DEFAULT_PAIRS_PATH)")
+    if not args.output:
+        parser.error("--output is required (или установите DEFAULT_OUTPUT_PATH)")
+    return args
 
 
 def save_result(df: pd.DataFrame, path: str) -> None:

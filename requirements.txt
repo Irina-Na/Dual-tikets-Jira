@@ -1,0 +1,7 @@
+openai>=1.60.0
+pandas>=2.2.0
+pyarrow>=16.0.0       # чтобы читать/писать parquet
+openpyxl>=3.1.0       # чтобы писать xlsx через pandas
+tenacity>=9.0.0
+langsmith>=0.1.40
+python-dotenv>=1.0.0

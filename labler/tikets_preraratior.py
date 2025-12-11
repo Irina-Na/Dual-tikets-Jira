@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal
 # ───────────────────────────────────────────────────────────── 
 
 
-def build_pair_user_input(issue1: Dict[str, Any], issue2: Dict[str, Any], format_type: Literal["markdown", "json"] = "markdown") -> str:
+def build_pair_user_input(issue1: Dict[str, Any], issue2: Dict[str, Any], format_type: Literal["markdown", "json"] = "json") -> str:
     """
     Build a user prompt for a pair of issues, allowing either markdown or JSON layout.
     """

@@ -156,7 +156,7 @@ def label_pair(
 
     Этот шаг — корневой trace в LangSmith.
     """
-    user_input = build_pair_user_input(issue1, issue2)
+    user_input = build_pair_user_input(issue1, issue2, format_type="json")
     data, raw_json = call_llm_for_pair_chat(client, user_input, PairLLMResult)
 
     label = data.label

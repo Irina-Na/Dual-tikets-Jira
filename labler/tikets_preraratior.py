@@ -35,6 +35,11 @@ def _issue_to_json_dict(issue: Dict[str, Any]) -> Dict[str, Any]:
     def clean(val: Any) -> Any:
         if val is None:
             return None
+        try:
+            if pd.isna(val):
+                return None
+        except Exception:
+            pass
         if isinstance(val, str):
             val = val.strip()
             return val or None
@@ -55,6 +60,7 @@ def _issue_to_json_dict(issue: Dict[str, Any]) -> Dict[str, Any]:
         "environment": clean(issue.get("environment")),
         "labels": clean(issue.get("labels")),
         "status": status_combined,
+        "resolution": resol_val,
         "created_time": clean(issue.get("created")),
         "updated_time": clean(issue.get("updated")),
         "epic_link": clean(issue.get("epic_link")),
@@ -67,7 +73,7 @@ def _issue_to_json_dict(issue: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in ticket.items() if v is not None}
 
 
-def format_ticket_jsonsuffix: str) -> str:
+def format_ticket_json(row: pd.Series, suffix: str) -> str:
     """
     Собирает JSON-описание одного тикета из колонок с суффиксом `_suffix`.
 
@@ -114,6 +120,7 @@ def format_ticket_jsonsuffix: str) -> str:
         "environment": environment,
         "labels": labels,
         "status": status_combined,
+        "resolution": resol_val,
         "created_time": created,
         "updated_time": updated,
         "epic_link": epic_link,
@@ -142,6 +149,12 @@ def format_ticket_markdown(issue: Dict[str, Any], tag: str) -> str:
     description = (issue.get("description") or "").strip()
     platform = issue.get("platform") or "unknown"
     components = issue.get("components") or ""
+    labels = issue.get("labels") or ""
+    epic_link = issue.get("epic_link") or ""
+    stand = issue.get("stand") or ""
+    sprint = issue.get("sprint") or ""
+    affects_versions = issue.get("affects_versions") or ""
+    fix_versions = issue.get("fix_versions") or ""
     environment = issue.get("environment") or ""
     status = issue.get("status") or ""
     resolution = issue.get("resolution") or ""
@@ -152,6 +165,11 @@ def format_ticket_markdown(issue: Dict[str, Any], tag: str) -> str:
     lines.append(f"### {tag}: {key}")
     if summary:
         lines.append(f"**Кратко (summary):** {summary}")
+    if description:
+        lines.append("")
+        lines.append("**Описание (включая шаги, ФР и ОР, если есть):**")
+        lines.append(description.strip())
+        
     lines.append(f"**Платформа:** {platform}")
     if components:
         lines.append(f"**Компоненты:** {components}")
@@ -161,11 +179,20 @@ def format_ticket_markdown(issue: Dict[str, Any], tag: str) -> str:
         lines.append(f"**Статус:** {status}")
     if resolution:
         lines.append(f"**Resolution:** {resolution}")
+    if labels:
+        lines.append(f"**Labels:** {labels}")
     if created or updated:
         lines.append(f"**Создан / обновлён:** {created} / {updated}")
-    if description:
-        lines.append("")
-        lines.append("**Описание (включая шаги, ФР и ОР, если есть):**")
-        lines.append(description.strip())
+    if epic_link:
+        lines.append(f"**Epic link:** {epic_link}")
+    if stand:
+        lines.append(f"**Stand:** {stand}")
+    if sprint:
+        lines.append(f"**Sprint:** {sprint}")
+    if affects_versions:
+        lines.append(f"**Affects versions:** {affects_versions}")
+    if fix_versions:
+        lines.append(f"**Fix versions:** {fix_versions}")
+    
 
     return "\n".join(lines)

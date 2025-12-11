@@ -160,7 +160,7 @@ def label_pair(
     data, raw_json = call_llm_for_pair_chat(client, user_input, PairLLMResult)
 
     label = data.label
-    if label not in ("duplicate", "probable_duplicate", "regression", "unrelated"):
+    if label not in ("duplicate", "probable_duplicate", "regression", "unrelated", "doubt"):
         print(f"Неверный label от LLM: {label!r}, raw={data}")
         label = "unknown"
 
